@@ -1,0 +1,253 @@
+version: '3.9'
+
+services:
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:29092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic job.application.created --partitions 1 --replication-factor 1 &&
+       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic job.application.updated --partitions 1 --replication-factor 1 &&
+       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic feedback.submitted --partitions 1 --replication-factor 1 &&
+       echo 'Kafka topics ready'"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  gateway:
+    build:
+      context: ../job-tracker-app-gateway
+    ports:
+      - "5000:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Auth0__Domain: ${AUTH0_DOMAIN}
+      Auth0__Audience: ${AUTH0_AUDIENCE}
+      Cors__AllowedOrigins: ${CORS_ALLOWED_ORIGINS}
+    networks:
+      - default
+      - proxy
+    depends_on:
+      - job-service
+      - job-service-consumer
+      - contact-service
+      - journal-service
+      - resume-service
+      - experience-service
+      - ai-service
+      - notification-service
+
+  job-service:
+    build:
+      context: ../job-tracker-app-job-service
+    ports:
+      - "5001:8080"
+    environment:
+      ConnectionStrings__DefaultConnection: Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Kafka__BootstrapServers: kafka:29092
+      Auth0__Domain: ${AUTH0_DOMAIN}
+      Auth0__Audience: ${AUTH0_AUDIENCE}
+    depends_on:
+      postgres:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+
+  job-service-consumer:
+    build:
+      context: ../job-tracker-app-job-service-consumer
+    ports:
+      - "5008:8080"
+    environment:
+      ConnectionStrings__DefaultConnection: Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Kafka__BootstrapServers: kafka:29092
+      Auth0__Domain: ${AUTH0_DOMAIN}
+      Auth0__Audience: ${AUTH0_AUDIENCE}
+      Cors__AllowedOrigins: ${CORS_ALLOWED_ORIGINS}
+    depends_on:
+      postgres:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+
+  contact-service:
+    build:
+      context: ../job-tracker-app-contact-service
+    ports:
+      - "5002:8080"
+    environment:
+      ConnectionStrings__DefaultConnection: Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Auth0__Domain: ${AUTH0_DOMAIN}
+      Auth0__Audience: ${AUTH0_AUDIENCE}
+    depends_on:
+      - postgres
+
+  journal-service:
+    build:
+      context: ../job-tracker-app-journal-service
+    ports:
+      - "5003:8080"
+    environment:
+      ConnectionStrings__DefaultConnection: Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Auth0__Domain: ${AUTH0_DOMAIN}
+      Auth0__Audience: ${AUTH0_AUDIENCE}
+    depends_on:
+      - postgres
+
+  resume-service:
+    build:
+      context: ../job-tracker-app-resume-service
+    ports:
+      - "5004:8080"
+    environment:
+      ConnectionStrings__DefaultConnection: Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Storage__Endpoint: minio:9000
+      Storage__AccessKey: ${MINIO_ROOT_USER}
+      Storage__SecretKey: ${MINIO_ROOT_PASSWORD}
+      Storage__BucketName: resumes
+      Auth0__Domain: ${AUTH0_DOMAIN}
+      Auth0__Audience: ${AUTH0_AUDIENCE}
+    depends_on:
+      - postgres
+      - minio
+
+  experience-service:
+    build:
+      context: ../job-tracker-app-experience-service
+    ports:
+      - "5006:8080"
+    environment:
+      ConnectionStrings__DefaultConnection: Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Storage__Endpoint: minio:9000
+      Storage__AccessKey: ${MINIO_ROOT_USER}
+      Storage__SecretKey: ${MINIO_ROOT_PASSWORD}
+      Storage__BucketName: experience-profiles
+      Auth0__Domain: ${AUTH0_DOMAIN}
+      Auth0__Audience: ${AUTH0_AUDIENCE}
+    depends_on:
+      - postgres
+      - minio
+
+  ai-service:
+    build:
+      context: ../job-tracker-app-ai-service
+    ports:
+      - "5007:8080"
+    environment:
+      ConnectionStrings__DefaultConnection: Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Storage__Endpoint: minio:9000
+      Storage__AccessKey: ${MINIO_ROOT_USER}
+      Storage__SecretKey: ${MINIO_ROOT_PASSWORD}
+      Storage__BucketName: generated-resumes
+      Auth0__Domain: ${AUTH0_DOMAIN}
+      Auth0__Audience: ${AUTH0_AUDIENCE}
+      Anthropic__ApiKey: ${ANTHROPIC_API_KEY}
+      Services__JobService: http://job-service:8080
+      Services__ExperienceService: http://experience-service:8080
+    depends_on:
+      - postgres
+      - minio
+      - job-service
+      - experience-service
+
+  notification-service:
+    build:
+      context: ../job-tracker-app-notification-service
+    ports:
+      - "5005:8080"
+    environment:
+      ConnectionStrings__DefaultConnection: Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Kafka__BootstrapServers: kafka:29092
+      Email__SmtpHost: ${SMTP_HOST}
+      Email__SmtpPort: ${SMTP_PORT}
+      Email__Username: ${SMTP_USERNAME}
+      Email__Password: ${SMTP_PASSWORD}
+      Email__FromAddress: ${EMAIL_FROM}
+      Feedback__RecipientEmail: ${FEEDBACK_RECIPIENT_EMAIL}
+    depends_on:
+      postgres:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+
+  # DuckDNS updater — keeps your dynamic home IP registered with DuckDNS.
+  # Runs only when DUCKDNS_SUBDOMAINS and DUCKDNS_TOKEN are set in .env.
+  duckdns:
+    image: linuxserver/duckdns:latest
+    environment:
+      SUBDOMAINS: ${DUCKDNS_SUBDOMAINS}
+      TOKEN: ${DUCKDNS_TOKEN}
+      LOG_FILE: "false"
+    restart: unless-stopped
+
+  # React frontend — only needed for local full-stack testing.
+  # Uses the "frontend" profile so it is excluded from all deployments by default.
+  # To include it locally: docker compose --profile frontend up -d
+  web-react:
+    profiles: ["frontend"]
+    build:
+      context: ../job-tracker-app-web-react
+      args:
+        VITE_GATEWAY_URL: ${VITE_GATEWAY_URL}
+        VITE_AUTH0_DOMAIN: ${AUTH0_DOMAIN}
+        VITE_AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID}
+        VITE_AUTH0_AUDIENCE: ${AUTH0_AUDIENCE}
+    ports:
+      - "80:80"
+    depends_on:
+      - gateway
+
+
+networks:
+  default:
+  proxy:
+    name: proxy
+    external: true
+
+volumes:
+  postgres_data:
+  minio_data:

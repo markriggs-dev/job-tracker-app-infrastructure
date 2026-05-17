@@ -1,0 +1,8 @@
+# Terraform state — contains sensitive resource IDs, never commit
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+
+# Credentials — never commit
+terraform.tfvars

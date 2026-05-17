@@ -1,0 +1,30 @@
+version: '3.9'
+
+# Nginx Proxy Manager — run this stack once on the NAS.
+# It handles TLS termination and Let's Encrypt certificates for all services.
+#
+# Start:  docker compose -f nginx-proxy-manager/docker-compose.yml up -d
+# Admin:  http://<nas-ip>:81  (default login: admin@example.com / changeme)
+
+services:
+  npm:
+    image: jc21/nginx-proxy-manager:latest
+    ports:
+      - "80:80"
+      - "443:443"
+      - "81:81"
+    volumes:
+      - npm_data:/data
+      - npm_letsencrypt:/etc/letsencrypt
+    networks:
+      - proxy
+    restart: unless-stopped
+
+networks:
+  proxy:
+    name: proxy
+    external: true
+
+volumes:
+  npm_data:
+  npm_letsencrypt:

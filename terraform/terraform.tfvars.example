@@ -1,0 +1,7 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored — never commit real credentials.
+
+linode_token   = "your-akamai-api-token"
+ssh_public_key = "ssh-ed25519 AAAA... your-email@example.com"
+root_password  = "a-strong-generated-password"
+region         = "us-central"  # Dallas — run `terraform providers` or check Akamai docs for region slugs
